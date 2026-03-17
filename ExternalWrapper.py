@@ -233,7 +233,20 @@ class ProcessHandler:
         if not Address:
             return
 
-        pm.w_string(self.Process, Address, Value)
+        data = Value.encode("utf-8")
+        length = len(data)
+
+        # Write length in the +0x18 slot (your reader already uses this)
+        self.WriteInt(Address + 0x18, length)
+
+        if length >= 16:
+            # allocate heap for long string
+            buf = pm.allocate_memory(self.Process, length + 1)
+            pm.w_bytes(self.Process, buf, data + b"\x00")
+            self.WritePointer(Address, buf)
+        else:
+            # inline short string
+            pm.w_bytes(self.Process, Address, data + b"\x00")
 
     def WriteVector2(self, Address: int, vec):
         self.WriteFloat(Address, vec.X)
@@ -260,6 +273,17 @@ class ProcessHandler:
 class Instance:
     Address: int
     Process: ProcessHandler
+
+    def __getattr__(self, name: str) -> "Instance":
+        """
+        Allows dot-access to children:
+        Game.Workspace -> Instance
+        Game.Players.Player1 -> Instance
+        """
+        try:
+            return self.FindFirstChild(name)
+        except ValueError as e:
+            raise AttributeError(f"'{self.ClassName}' has no child '{name}'") from e
 
     def __init__(self, process: ProcessHandler, address: int | None = None):
         self.Process = process
@@ -462,9 +486,17 @@ class Instance:
     
     @property
     def Team(self):
-        return self.Process.ReadString(
+        return self.Process.ReadPointer(
             self.Address + self.Process.GetOffset("Team")
         )
+    
+    @property
+    def TeamColor(self):
+        Data = self.Process.ReadPointer(
+            self.Address + self.Process.GetOffset("Team")
+        )
+
+        return self.Process.ReadString(Data + self.Process.GetOffset("TeamColor"))
 
     def GetChildren(self) -> list["Instance"]:
         children = []
@@ -533,4 +565,4 @@ class Instance:
         return Vector2(
             (screen_x + 1) * 0.5,
             (1 - screen_y) * 0.5
-                    )
+        )
